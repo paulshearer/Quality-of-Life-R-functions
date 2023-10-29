@@ -1,0 +1,6 @@
+﻿column_name,data_type,required,allowed_values,description,temp_note
+func_name,character(0),TRUE,,,
+testCase,character(0),TRUE,,,
+testCaseDescription,character(0),TRUE,,,
+result,logical(),TRUE,,,
+resultsDescription,character(0),TRUE,,,
