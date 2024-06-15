@@ -41,7 +41,8 @@ uppercaseColumnNames <- function(df) {
   return(df)
 }
 
-write_worksheet <- function(workbook, worksheet_name, data_frame_func) {
+write_worksheet <- function(workbook, worksheet_name, data_frame_func, format_instructions = NULL) {
+  
   
   # Writes data to a specified worksheet within an Excel workbook.
   # This function is intended to beautify the Excel output by adjusting column widths, 
@@ -61,81 +62,120 @@ write_worksheet <- function(workbook, worksheet_name, data_frame_func) {
   # 5. NAs in character columns are replaced with "--".
   # 6. Data is checked for UTF-8 compatibility.
   # 7. The first row (headers) is frozen for easier scrolling in Excel.
-  # 
-  # Paul Shearer
-  # 10/29/2023
+  # 8. format_instructions support 'currency', 'align_left' and 'highlight_light_grey' (right_align not testing)
   
-  # Create styles for headers, center alignment, and date format
-  header_st <- createStyle(textDecoration = "Bold", halign = "center", wrapText = TRUE)
+  #example usage:
+  
+  # wb <- write_worksheet(wb
+  #                       ,"name_of_worksheet"
+  #                       ,myDataFrame
+  #                       ,"currency=(5);align_left=(7);highlight_light_grey=(11,12)")
+  #
+  # In the example a new worksheet named 'name_of_worksheet' is created in the excel workbook and populated with the data from myDataFrame. 
+  # Column 5 is formated as currency.  Column 7 is left aligned.  Columns 11 and 12 are highlighted as light grey.
+  #
+  
+  
+  # Create styles
+  header_style <- createStyle(textDecoration = "Bold", halign = "center", wrapText = TRUE)
   center_style <- createStyle(halign = "center", wrapText = TRUE)
-  date_style <- createStyle(numFmt = "yyyy-mm-dd", halign = "center")
+  left_style <- createStyle(halign = "left", wrapText = TRUE)
+  right_style <- createStyle(halign = "right", wrapText = TRUE)
+  currency_style <- createStyle(numFmt = "$#,##0.00", halign = "center")
+  currency_left_style <- createStyle(numFmt = "$#,##0.00", halign = "left")
+  currency_right_style <- createStyle(numFmt = "$#,##0.00", halign = "right")
+  date_style_YYYY_MM_DD <- createStyle(numFmt = "YYYY-MM-DD", halign = "center")
+  highlight_style <- createStyle(fgFill = "#D3D3D3")  # Light grey background
   
   # Add a new worksheet to the workbook
   addWorksheet(workbook, sheetName = worksheet_name)
   
-  # Replace underscores in column names with spaces for better readability
+  # Replace underscores in column names with spaces
   colnames(data_frame_func) <- gsub("_", " ", colnames(data_frame_func))
   
-  # Convert columns with "date" in their name to Date class
-  date_cols <- grep("(?i)date", colnames(data_frame_func))
-  data_frame_func[, date_cols] <- lapply(data_frame_func[, date_cols], as.Date)
-  
-  # Replace NAs with '--' for character columns
+  # Replace NAs in character columns
   data_frame_func <- data_frame_func %>%
     mutate_if(is.character, ~replace_na(., '--'))
   
-  # Write the cleaned data to the specified worksheet
-  writeData(workbook,
-            sheet = worksheet_name,
-            check_utf8(data_frame_func),
-            rowNames = FALSE,
-            colNames = TRUE,
-            startRow = 1,
-            headerStyle = header_st,
-            borders = "none",
-            borderColour = "black")
+  # Write the data
+  writeData(workbook, sheet = worksheet_name, x = data_frame_func, startRow = 1, startCol = 1, headerStyle = header_style)
   
-  # Calculate optimal column widths based on content, with a max width of 30 units
-  col_widths <- lapply(check_utf8(data_frame_func), function(x) {
-    if(length(x) > 0 && !all(is.na(x))) {
-      return(max(nchar(x), na.rm = TRUE))
+  # Apply default center style to all columns
+  addStyle(workbook, sheet = worksheet_name, style = center_style, rows = 2:(nrow(data_frame_func) + 1), cols = 1:ncol(data_frame_func), gridExpand = TRUE)
+  
+  # Initialize a list to keep track of styles for each column
+  column_styles <- replicate(ncol(data_frame_func), list(currency = FALSE, align = "center", date = FALSE, highlight = FALSE), simplify = FALSE)
+  
+  # Parse format instructions and apply styles
+  if (!is.null(format_instructions) && format_instructions != "") {
+    instructions <- strsplit(format_instructions, ";")[[1]]
+    for (instr in instructions) {
+      parts <- strsplit(instr, "=")[[1]]
+      style_type <- parts[1]
+      columns <- as.numeric(unlist(strsplit(parts[2], "[(),]")))
+      
+      for (col in columns) {
+        if (!is.na(col) && col > 0 && col <= ncol(data_frame_func)) {
+          if (style_type == "currency") {
+            column_styles[[col]]$currency <- TRUE
+          }
+          if (style_type == "align_left") {
+            column_styles[[col]]$align <- "left"
+          }
+          if (style_type == "align_right") {
+            column_styles[[col]]$align <- "right"
+          }
+          if (style_type == "date") {
+            column_styles[[col]]$date <- TRUE
+          }
+          if (style_type == "highlight_light_grey") {
+            column_styles[[col]]$highlight <- TRUE
+          }
+        }
+      }
+    }
+  }
+  
+  # Apply the highlight style first if needed
+  for (col in seq_along(column_styles)) {
+    if (column_styles[[col]]$highlight) {
+      addStyle(workbook, sheet = worksheet_name, style = highlight_style, 
+               rows = 2:(nrow(data_frame_func) + 1), cols = col, gridExpand = TRUE, stack = TRUE)
+    }
+  }
+  
+  # Apply the other styles based on the column settings
+  for (col in seq_along(column_styles)) {
+    style_info <- column_styles[[col]]
+    applied_style <- switch(style_info$align,
+                            "left" = left_style,
+                            "right" = right_style,
+                            center_style) # Default to center if not left or right
+    if (style_info$currency) {
+      applied_style <- switch(style_info$align,
+                              "left" = currency_left_style,
+                              "right" = currency_right_style,
+                              currency_style) # Override with currency style if needed
+    }
+    if (style_info$date) {
+      applied_style <- date_style_YYYY_MM_DD # Override with date style if needed
+    }
+    # Apply the final style
+    addStyle(workbook, sheet = worksheet_name, style = applied_style, 
+             rows = 2:(nrow(data_frame_func) + 1), cols = col, gridExpand = TRUE, stack = TRUE)
+  }
+  
+  # Set column widths and freeze top row
+  widths <- sapply(data_frame_func, function(col) {
+    if(all(is.na(col))) {
+      return(10) # Default width for columns with all NAs
     } else {
-      return(0)
+      return(min(30, max(nchar(as.character(col)), na.rm = TRUE) + 2))
     }
   })
   
-  # Apply the calculated widths, ensuring a minimum width of 10 units
-  col_widths <- sapply(col_widths, function(width) {
-    width <- min(30, width + 2)
-    if (is.na(width) || width < 10) width <- 10
-    width
-  })
-  
-  # Adjust the worksheet's column widths accordingly
-  setColWidths(workbook, sheet = worksheet_name, cols = 1:ncol(data_frame_func), widths = col_widths)
-  
-  # Styles for word wrapping and centering content
-  word_wrap_style <- createStyle(wrapText = TRUE)
-  rows_to_wrap <- 2:(nrow(data_frame_func) + 1)
-  
-  # Apply the styles to the data rows
-  addStyle(workbook, sheet = worksheet_name, style = word_wrap_style, rows = rows_to_wrap, cols = 1:ncol(data_frame_func), gridExpand = TRUE)
-  addStyle(workbook, sheet = worksheet_name, style = center_style, rows = rows_to_wrap, cols = 1:ncol(data_frame_func), gridExpand = TRUE)
-  
-  # Apply date format style to date columns
-  if(length(date_cols) > 0) {
-    rows_to_format <- 2:(nrow(data_frame_func) + 1)
-    addStyle(workbook, sheet = worksheet_name, style = date_style, rows = rows_to_format, cols = date_cols, gridExpand = TRUE)
-  }
-  
-  # Freeze the first row for user convenience in Excel
+  setColWidths(workbook, sheet = worksheet_name, cols = 1:length(widths), widths = widths)
   freezePane(workbook, sheet = worksheet_name, firstRow = TRUE)
   
-  # Return the updated workbook
   return(workbook)
 }
-
-
-
-
-
